@@ -1835,91 +1835,61 @@ function ev.onShowDialog(id, st, tit, b1, b2, text)
         if settings.total_metod then
             sampCloseCurrentDialogWithButton(0)
         end
-        if tit:match('Бизнесов под крышей') then
-
-            local mySession = FinkaUpdater.session
-            local currentPage, maxPages
-
-            -- определяем страницу
-            for line in text:gmatch("[^\r\n]+") do
-                local p, mp = line:match("Следующая страница %[(%d+) / (%d+)%]")
-                if p then
-                    currentPage = tonumber(p)
-                    maxPages = tonumber(mp)
-                    break
-                end
-            end
-
-            -- если не нашли — считаем вручную
-            if not currentPage then
-                local count = 0
-                for _ in pairs(FinkaUpdater.processedPages) do
-                    count = count + 1
-                end
-                currentPage = count + 1
-                maxPages = currentPage
-            end
-
-            -- защита от дублей
-            if FinkaUpdater.processedPages[currentPage] then return false end
-            FinkaUpdater.processedPages[currentPage] = true
-
-            -- парсинг бизнесов
-            for line in text:gmatch("[^\r\n]+") do
-
-                local name_biz, idbiz, name_player, cashMafFinka =
-                    line:match(
-                        "{C0C0C0}%[%d+%]%s+{FFFFFF}([^(]+)%((%d+)%)%s+{FFFFFF}([%a_]+)%s+{96E54C}:CASH:([%d%.]+)"
-                    )
-
-                if name_biz and idbiz then
-
-                    local cash = tonumber((cashMafFinka:gsub("%.", ""))) or 0
-
-                    table.insert(FinkaUpdater.data, {
-                        name_biz = name_biz,
-                        idbiz = tonumber(idbiz),
-                        name_player = name_player,
-                        cash = cash,
-                    })
-                end
-            end
-
-            -- листаем дальше
-            if currentPage < maxPages then
-                lua_thread.create(function()
-                    wait(50)
-
-                    if mySession ~= FinkaUpdater.session then return end
-                    if not FinkaUpdater.active then return end
-
-                    local btn = (currentPage == 1) and 30 or 31
-                    sampSendDialogResponse(id, 1, btn, "")
-                end)
-            else
-                -- завершение
-                lua_thread.create(function()
-                    wait(90)
-
-                    if mySession ~= FinkaUpdater.session then return end
-
-                    settings.Finka = FinkaUpdater.data
-                    save_settings()
-
-                    if settings.debugmessage_finka then
-                        test_message("Финка обновлена. Всего: " .. #settings.Finka)
-                    end
-
-                    FinkaUpdater.active = false
-                    checkmbiz = false
-                end)
-            end
-
-            return false
+        if title:find("БИЗНЕСОВ ПОД КРЫШЕЙ") or text:find("БАЛАНС КРЫШИ") then
+        local currentPage, totalPages = 1, 1
+        
+        -- Узнаем текущую страницу
+        if text:find("СТРАНИЦА%[(%d+)%s*/%s*(%d+)%]") then
+            currentPage, totalPages = text:match("СТРАНИЦА%[(%d+)%s*/%s*(%d+)%]")
+            currentPage = tonumber(currentPage)
+            totalPages = tonumber(totalPages)
         end
 
-    end
+        local lineId = 0
+        local nextButtonLine = -1
 
+        for line in text:gmatch("[^\r\n]+") do
+            local cleanLine = line:gsub("{%x%x%x%x%x%x}", "") -- Чистим цвета сервера
+            
+            -- Фиксируем строку переключения страницы "Далее"
+            if cleanLine:find("СЛЕДУЮЩАЯ СТРАНИЦА") or cleanLine:find(">>>") then
+                nextButtonLine = lineId
+            end
+
+            -- Читаем новый TABLIST формат: [ID] Название \t Владелец \t $ Финка
+            if cleanLine:find("^%s*%[%d+%s*%]") then
+                local bizId, bName, bBalance = cleanLine:match("^%s*%[(%d+)%]%s*([^(]+)%s*.-%s*%$%s*([%d.]+)%s*.-$")
+                
+                if bizId and bBalance then
+                    bizId = tonumber(bizId)
+                    local cleanBalance = tonumber(bBalance:gsub("%.", "")) -- Избавляемся от точек
+                    
+                    settings.Finka[bizId] = cleanBalance -- Записываем в память рендера
+                    
+                    if settings.debugmessage_finka then
+                        test_message(string.format("Обновлен Бизнес №%d: %s | Баланс крыши: %d$", bizId, bName, cleanBalance))
+                    end
+                end
+            end
+            lineId = lineId + 1
+        end
+        save_settings()
+
+        -- Умное скрытое авто-листание
+        if settings.total_metod then
+            if nextButtonLine ~= -1 and currentPage < totalPages then
+                lua_thread.create(function()
+                    wait(120) -- Безопасная задержка
+                    sampSendDialogResponse(dialogId, 1, nextButtonLine, "")
+                end)
+                return false
+            else
+                sampSendDialogResponse(dialogId, 0, 0, "")
+                message("{00FF00}Все страницы /mbiz успешно просканированы!")
+                return false
+            end
+        end
+    end
     if tit:match('{BFBBBA}Действие') then
         if mat then
             if mattake then
